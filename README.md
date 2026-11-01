@@ -70,7 +70,7 @@ flutter analyze
 flutter build web --release --no-web-resources-cdn
 ```
 
-Integration checks cover hashing, invalid credentials, forged/expired JWTs, 401/403, attempted role escalation, role changes, rotation, replay, concurrent refreshes, revocation and unconfigured Google behavior. The web release build and static analysis are verified. The Docker daemon and Android emulator were unavailable during the handover verification, so Docker runtime and native Google sign-in still need their environment-specific rehearsal.
+Integration checks cover hashing, invalid credentials, forged/expired JWTs, 401/403, attempted role escalation, role changes, rotation, replay, concurrent refreshes, revocation and unconfigured Google behavior. The web release build and static analysis are verified. The Android debug APK also compiles successfully. The Docker daemon and Android emulator were unavailable, so Docker runtime and native Google sign-in still need their environment-specific rehearsal.
 
 For Android emulator development, point the API at `http://10.0.2.2:3220` and allow that host only in the debug network-security configuration. Release clients use HTTPS; do not disable certificate validation. Android backup is disabled for the workshop secure-storage data.
 

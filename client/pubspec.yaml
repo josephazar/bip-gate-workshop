@@ -1,0 +1,26 @@
+name: gate_client
+description: BIP 2026 authentication and authorization workshop.
+publish_to: none
+version: 1.0.0+1
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.5.0
+  flutter_secure_storage: ^10.0.0
+  google_sign_in: ^7.2.0
+  google_sign_in_web: ^1.1.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: NotoSans
+      fonts:
+        - asset: assets/fonts/NotoSans.ttf
+    - family: NotoSansMono
+      fonts:
+        - asset: assets/fonts/NotoSansMono.ttf

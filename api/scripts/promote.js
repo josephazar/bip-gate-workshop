@@ -1,0 +1,2 @@
+const db=require('../src/db');
+(async()=>{const email=process.argv[2];if(!email) throw Error('Usage: npm run promote -- student@example.com');const r=await db.query("UPDATE gate_users SET role='admin' WHERE email=$1 RETURNING email",[email.toLowerCase()]);if(!r.rowCount) throw Error('No matching user. Register first.');console.log('Promoted:',r.rows[0].email);await db.pool.end();})().catch(e=>{console.error(e.message);process.exitCode=1;db.pool.end()});

@@ -70,7 +70,14 @@ flutter analyze
 flutter build web --release --no-web-resources-cdn
 ```
 
-Integration checks cover hashing, invalid credentials, forged/expired JWTs, 401/403, attempted role escalation, role changes, rotation, replay, concurrent refreshes, revocation and unconfigured Google behavior. The web release build and static analysis are verified. The Android debug APK also compiles successfully. The Docker daemon and Android emulator were unavailable, so Docker runtime and native Google sign-in still need their environment-specific rehearsal.
+Integration checks cover hashing, invalid credentials, forged/expired JWTs, 401/403, attempted role escalation, role changes, rotation, replay, concurrent refreshes, revocation and unconfigured Google behavior. The web release build and static analysis are verified. The Android debug APK compiles, installs and runs on the instructor's API 33 ARM64 emulator. Native integration also verifies HTTP access to the local API, Android secure-storage read/write, refresh rotation, session restoration, logout and revocation. Positive Google sign-in still requires provider configuration and interactive sign-in. The local Docker daemon was unavailable.
+
+To repeat the native integration check, run the API against a disposable local workshop database and start an Android emulator. The test creates a fictional `qa-native-…@example.test` account and revokes its session afterwards. It only accepts the standard emulator's local API address:
+
+```sh
+cd client
+flutter test integration_test/native_session_test.dart -d emulator-5554 --no-enable-impeller --dart-define=API_URL=http://10.0.2.2:3220
+```
 
 For Android emulator development, point the API at `http://10.0.2.2:3220` and allow that host only in the debug network-security configuration. Release clients use HTTPS; do not disable certificate validation. Android backup is disabled for the workshop secure-storage data.
 

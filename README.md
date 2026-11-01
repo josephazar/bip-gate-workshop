@@ -4,7 +4,7 @@ A runnable teaching example of authentication and server-side authorization usin
 
 ## Run locally
 
-Requires Node 22+, PostgreSQL, Flutter 3.35+ / Dart 3.9+. Tested on Flutter 3.35.7 and Node 24.20.0.
+Requires Node 22+, PostgreSQL, Flutter 3.35+ / Dart 3.9+. Tested on Flutter 3.35.7 and Node 26.0.0.
 
 ```sh
 createdb bip_gate

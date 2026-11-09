@@ -1,110 +1,95 @@
 # The Gate — BIP 2026 workshop
 
-A runnable teaching example of authentication and server-side authorization using Flutter, Node.js and PostgreSQL. Builds on the earlier AuthCraftFlutter / user-auth-backend teaching project; this version replaces plaintext passwords and client-supplied user IDs with verified sessions.
+A complete, runnable **user authentication system**, built top-down in nine steps:
+a **Flutter** app, a **Node.js + Express** API and a **PostgreSQL** database, with sign-in by
+**email and password** or by **Google**, and **JWT** access tokens. It runs on your own computer.
 
-## Run locally
-
-Requires Node 22+, PostgreSQL, Flutter 3.35+ / Dart 3.9+. Tested on Flutter 3.35.7 and Node 26.0.0.
-
-```sh
-createdb bip_gate
-cd api
-npm ci
-cp .env.example .env
+```
+Flutter app  ──HTTPS──▶  Node.js API  ──SQL──▶  PostgreSQL
+     │                       ▲
+     └──── Google ID token ──┘   (the API checks it, then issues its own tokens)
 ```
 
-Set `JWT_SECRET` in your local `.env` to a random value of at least 32 characters. A generator is `openssl rand -hex 32`. Never commit `.env`.
+## Run it (one script)
+
+You need Node.js 22+, PostgreSQL, and Flutter with an Android emulator.
 
 ```sh
-npm start
+./start.sh        # database + API + emulator + app   (hot reload: r / R / q)
+./stop.sh         # stops the app, the API and the emulator that start.sh opened
 ```
 
-The API listens at `http://localhost:3220`. In another terminal:
+On macOS you can double-click `START-GATE.command` and `STOP-GATE.command` in the course folder instead.
+`./start.sh api` starts only the API (http://localhost:3220). The script never resets or drops a database,
+creates `api/.env` with a fresh `JWT_SECRET` only if it is missing, and never touches PostgreSQL itself.
+Slow emulator? `EMULATOR_ARGS="-gpu host" ./start.sh`. Logs are in `.run/`.
 
-```sh
-cd client
-flutter pub get
-flutter run -d chrome --web-hostname localhost --web-port 8080 --dart-define=API_URL=http://localhost:3220
-```
+## The nine steps (the slides follow the same order)
 
-Docker alternative: set `POSTGRES_PASSWORD` and `JWT_SECRET` in a root `.env`, then `docker compose up --build`. Start Flutter separately. The compose database has no published port; only the API is bound to localhost.
+| # | Step | Where | Try it |
+|---|---|---|---|
+| 1 | Tables | `database/01_users.sql` | `createdb bip_gate && psql bip_gate -f database/01_users.sql` |
+| 2 | API skeleton | `api/src/server.js`, `app.js`, `config.js`, `db.js` | `cd api && npm install && npm start`, then `curl localhost:3220/healthz` |
+| 3 | Register | `routes/auth.js`, `lib/passwords.js`, `lib/users.js` | `curl -X POST localhost:3220/auth/register …` |
+| 4 | Login and the JWT | `lib/tokens.js` | `curl … /auth/login`, then `npm run decode -- <accessToken>` |
+| 5 | The keeper | `middleware/requireAuth.js`, `routes/me.js` | `GET /me` 200, `/admin/users` 403, `npm run promote -- you@example.com` |
+| 6 | Stay signed in | `database/02_refresh_tokens.sql`, `rotateRefreshToken` | refresh once, replay the old token |
+| 7 | Google | `lib/google.js`, `POST /auth/google` | put the client ID in `api/.env` |
+| 8 | The Flutter app | `client/lib`: `models/`, `services/`, `screens/` | `./start.sh` |
+| 9 | One script | `start.sh`, `stop.sh` | `cd api && DATABASE_URL=postgres://localhost/bip_gate_qa npm test` |
 
-## Observe the access boundary
+## Design in one page
 
-Create a user with a password of 12–128 characters. `GET /me` succeeds. **Test admin API** returns **403** for a normal user. Registration ignores a submitted role.
+- **Two tables.** `users` (email, name, Argon2id hash or Google subject, role) and `refresh_tokens` (SHA-256 hash, absolute expiry, used-at).
+- **Access token:** a JWT signed with HS256, 15 minutes (`ACCESS_TOKEN_SECONDS`). Claims: `sub`, `role`, `iss`, `aud`, `iat`, `exp`.
+- **The role comes from the database** on every protected request, never from the token.
+- **Refresh token:** 32 random bytes, 7-day absolute limit, valid once. Reuse deletes all refresh tokens of that user.
+- **Logout** deletes the refresh token. An access token already issued works until it expires (15 minutes): that is the price of a token the server does not look up. A sessions table would make it immediate (see the Going further slides).
+- **Google:** the app gets an ID token from Google; the API verifies signature, issuer, expiry and audience, requires a verified email and keys the account on Google's `sub`. A Google email that matches a password account is refused with 409 (no merge on an email match alone).
+- **Login** answers the same message and takes the same time for an unknown email and a wrong password. Register, login and Google are limited to 20 attempts per 15 minutes per address.
 
-```sh
-cd api
-npm run promote -- demo@example.test
-```
+## API
 
-Try the admin route again. The current database role is checked on every request; a stale role claim cannot override it. Instructor SQL can demote the demo user afterwards.
+| Route | Behaviour |
+|---|---|
+| `POST /auth/register` | `{name, email, password}` → normal user + tokens. A submitted role is ignored. |
+| `POST /auth/login` | `{email, password}` → tokens |
+| `POST /auth/google` | `{idToken}` → tokens (503 if `GOOGLE_CLIENT_IDS` is not set) |
+| `POST /auth/refresh` | `{refreshToken}` → a new pair; the old token stops working |
+| `POST /auth/logout` | `{refreshToken}` → 204 |
+| `GET /me` | the signed-in user |
+| `GET /admin/users` | admins only (403 for everyone else) |
+| `GET /healthz` | database-backed readiness |
 
-Access JWTs expire after 15 minutes. Refresh tokens are random, stored hashed, rotated atomically, and expire with the seven-day absolute session. Reuse revokes the session family. The API checks session revocation for each access JWT, so logout also blocks existing access tokens immediately. Flutter shares one in-flight refresh to prevent concurrent 401 responses from reusing a refresh token.
+## Google sign-in (optional)
 
-Native Android stores only the refresh token through `flutter_secure_storage`; access tokens stay in memory. Web stores both tokens only in memory, so reload signs out. This deliberately does not claim browser storage has Keystore guarantees. A production web alternative is a BFF with HttpOnly cookies and CSRF controls.
+1. In Google Cloud create a project, the consent screen (External, Testing, add yourself as a test user) and an OAuth client of type **Web application**.
+2. Put its client ID in `api/.env`: `GOOGLE_CLIENT_IDS="<id>.apps.googleusercontent.com"`. It is a public identifier, not a secret.
+3. For Android, add a second OAuth client of type **Android**: package `com.example.gate_client` and the SHA-1 of your signing key
+   (`keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey`, password `android`).
+4. `./start.sh` passes the same web client ID to the app as `--dart-define=GOOGLE_WEB_CLIENT_ID=…`. Use an emulator image with Google Play and sign in to a Google account in it.
 
-## Google Sign-In configuration
+The Google sign-in itself needs your own account and an interactive window, so the automated tests replace Google's signature check with a stub.
 
-1. In Google Cloud, configure the consent screen and an OAuth **Web application** client. Add `http://localhost`, `http://localhost:8080` and the eventual deployed UI origin to its authorized JavaScript origins. If the consent app is in testing, add the instructor as a test user.
-2. Set API `GOOGLE_CLIENT_IDS` to the accepted web client ID(s), separated by commas. These IDs are public identifiers, not client secrets.
-3. Run Flutter with `--dart-define=GOOGLE_WEB_CLIENT_ID=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com` as well as `API_URL`. Restart/rebuild after changing defines. The web UI uses the Google-rendered button and `authenticationEvents`, as required by google_sign_in v7.
-4. For Android, add an Android OAuth client with package `com.example.gate_client` and your debug/release signing SHA-1/SHA-256 fingerprints. The SDK uses the web client ID as `serverClientId`. See the plugin setup reference before changing package/signing configuration.
-5. Sign in. Flutter sends the ID token over HTTPS in a deployed environment. `google-auth-library` verifies signature, issuer, expiry and the configured audience. A verified provider subject is the stable identity. The API then issues its own application session.
-6. An email match with an existing password account is **not** silently linked. Sign in to that existing account, select **Link the next Google sign-in to this account**, then complete the Google flow. An already-linked subject cannot be assigned elsewhere.
-
-No OAuth client secret belongs in Flutter. This is a Google SDK ID-token exchange, not a generic OAuth authorization server. The lecture also explains authorization code with PKCE for public native clients.
-
-The positive Google flow requires account-specific provider configuration and an interactive sign-in. It is not faked by the test suite. Password flows remain usable when Google is unconfigured; the API returns an explicit 503 for Google login in that state.
-
-## Tests and builds
-
-Use a disposable test database; the test creates and removes its own synthetic user.
+## Tests
 
 ```sh
 createdb bip_gate_qa
-cd api
-DATABASE_URL=postgres://localhost/bip_gate_qa JWT_SECRET=local-integration-secret-at-least-32-characters npm test
-cd ../client
-flutter analyze
-flutter build web --release --no-web-resources-cdn
+cd api    && DATABASE_URL=postgres://localhost/bip_gate_qa npm test      # 11 tests: tokens, roles, refresh, Google rules
+cd client && flutter analyze && flutter test                             # 10 tests: claims, errors, refresh once
 ```
 
-Integration checks cover hashing, invalid credentials, forged/expired JWTs, 401/403, attempted role escalation, role changes, rotation, replay, concurrent refreshes, revocation and unconfigured Google behavior. The web release build and static analysis are verified. The Android debug APK compiles, installs and runs on the instructor's API 33 ARM64 emulator. Native integration also verifies HTTP access to the local API, Android secure-storage read/write, refresh rotation, session restoration, logout and revocation. Positive Google sign-in still requires provider configuration and interactive sign-in. The local Docker daemon was unavailable.
+The API tests forge, expire, re-sign, strip and replace the algorithm of tokens, replay a refresh token, race two refreshes, and check that a Google email never merges into a password account.
 
-To repeat the native integration check, run the API against a disposable local workshop database and start an Android emulator. The test creates a fictional `qa-native-…@example.test` account and revokes its session afterwards. It only accepts the standard emulator's local API address:
+## What this workshop leaves out on purpose
 
-```sh
-cd client
-flutter test integration_test/native_session_test.dart -d emulator-5554 --no-enable-impeller --dart-define=API_URL=http://10.0.2.2:3220
-```
-
-For Android emulator development, point the API at `http://10.0.2.2:3220` and allow that host only in the debug network-security configuration. Release clients use HTTPS; do not disable certificate validation. Android backup is disabled for the workshop secure-storage data.
-
-## API routes
-
-| Route | Behavior |
-|---|---|
-| `POST /auth/register` | Name, email, password → normal user + session |
-| `POST /auth/login` | Password verification → session |
-| `POST /auth/refresh` | Rotate one refresh credential |
-| `POST /auth/logout` | Revoke the refresh session |
-| `POST /auth/google` | Verify Google ID token → session |
-| `POST /auth/google/link` | Authenticated explicit linking |
-| `GET /me` | Verified active session required |
-| `GET /admin/users` | Active session + current admin role required |
-| `GET /healthz` | Database-backed readiness check |
-
-This teaching repo omits password recovery, email verification, MFA, audit-event retention and a production secrets/deployment policy. Registration email ownership is not asserted by password registration. These are deliberate workshop boundaries, not security controls implemented elsewhere.
+Password reset, email verification, MFA and passkeys, an audit log, per-device session lists, immediate revocation of access tokens, and a production deployment (HTTPS, secrets management, a proxy and `trust proxy`). The slides in the Going further section explain each one.
 
 ## References
 
-- [Google backend ID-token verification](https://developers.google.com/identity/sign-in/web/backend-auth)
-- [google_sign_in v7](https://pub.dev/packages/google_sign_in)
-- [Web button and origins](https://pub.dev/packages/google_sign_in_web)
-- [Android setup](https://pub.dev/packages/google_sign_in_android)
-- [flutter_secure_storage](https://pub.dev/packages/flutter_secure_storage)
-- [OAuth Security BCP, RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html)
-- [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+- [Google: verify an ID token on the backend](https://developers.google.com/identity/sign-in/web/backend-auth)
+- [google_sign_in](https://pub.dev/packages/google_sign_in) · [flutter_secure_storage](https://pub.dev/packages/flutter_secure_storage)
+- [OAuth 2.0 Security Best Current Practice, RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html)
+- [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 
-Bundled Noto Sans / Noto Sans Mono fonts are licensed under the SIL Open Font License; licenses are under `client/assets/fonts/`.
+Bundled Noto Sans fonts are under the SIL Open Font License (`client/assets/fonts/`).

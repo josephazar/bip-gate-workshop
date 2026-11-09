@@ -1,4 +1,4 @@
-// The five doors: register, login, google, refresh, logout.
+// The doors: register, login, google, refresh, logout, forgot-password, reset-password, google/link.
 const express = require('express');
 const { rateLimit } = require('express-rate-limit');
 const db = require('../db');
@@ -7,11 +7,15 @@ const { HttpError } = require('../lib/errors');
 const { hashPassword, verifyPassword } = require('../lib/passwords');
 const { issueSession, rotateRefreshToken, revokeRefreshToken } = require('../lib/tokens');
 const { verifyGoogleIdToken } = require('../lib/google');
-const { createPasswordUser, findOrCreateGoogleUser } = require('../lib/users');
+const { createPasswordUser, findOrCreateGoogleUser, linkGoogle, publicUser } = require('../lib/users');
+const { createResetCode, useResetCode, sendResetEmail } = require('../lib/reset-codes');
+const { requireAuth } = require('../middleware/requireAuth');
 
 const router = express.Router();
 
-// At most 20 tries per address every 15 minutes on the doors that guess passwords.
+const SENT = `If an account uses this email, we sent a 6-digit code. It works for ${config.resetCodeMinutes} minutes.`;
+
+// At most 20 tries per address every 15 minutes on the doors that guess passwords or codes.
 const slowDown = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: config.loginAttemptsPer15Min,
@@ -92,6 +96,43 @@ router.post('/refresh', async (req, res) => {
 router.post('/logout', async (req, res) => {
   await revokeRefreshToken(req.body?.refreshToken);
   res.status(204).end();
+});
+
+// ── POST /auth/google/link ─────────────────────────────────────────────────────
+// For a person who is ALREADY signed in (say, with a password) and wants Google as a second way in.
+router.post('/google/link', requireAuth, slowDown, async (req, res) => {
+  const profile = await verifyGoogleIdToken(req.body?.idToken);
+  const user = await linkGoogle(req.user, profile);
+  res.json(publicUser(user));
+});
+
+// ── POST /auth/forgot-password ─────────────────────────────────────────────────
+router.post('/forgot-password', slowDown, async (req, res) => {
+  const email = readEmail(req.body);
+  const { rows } = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+  if (rows[0]) {
+    const code = await createResetCode(rows[0].id);   // null if one was sent a moment ago
+    // Not awaited: the answer must not be slower when the address has an account.
+    if (code) sendResetEmail(email, code).catch((e) => console.error('Email failed:', e.message));
+  }
+  // The same answer for every address: this door cannot tell anyone who is registered.
+  res.json({ message: SENT });
+});
+
+// ── POST /auth/reset-password ──────────────────────────────────────────────────
+router.post('/reset-password', slowDown, async (req, res) => {
+  const email = readEmail(req.body);
+  const code = clean(req.body?.code);
+  const password = readNewPassword(req.body);
+  const refused = new HttpError(400, 'That code is wrong or has expired. Ask for a new one.');
+  if (!/^\d{6}$/.test(code)) throw refused;
+  const { rows } = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+  const userId = rows[0]?.id;
+  if (!userId || !(await useResetCode(userId, code))) throw refused;   // one message for every failure
+  const passwordHash = await hashPassword(password);
+  await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, userId]);
+  await db.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);   // old sessions end
+  res.json({ message: 'Password changed. Sign in with your new password.' });
 });
 
 module.exports = router;

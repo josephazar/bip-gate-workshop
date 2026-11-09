@@ -64,6 +64,18 @@ class SessionManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The same person with a changed account (for example, Google was just linked).
+  void updateUser(User updated) {
+    user = updated;
+    notifyListeners();
+  }
+
+  /// A message for the login screen, e.g. "Password changed."
+  void showNotice(String text) {
+    notice = text;
+    notifyListeners();
+  }
+
   Future<void> clear({String? notice}) async {
     accessToken = null;
     refreshToken = null;

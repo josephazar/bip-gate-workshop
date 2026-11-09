@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 import '../services/google_service.dart';
 import '../services/session_manager.dart';
 import '../widgets/message_box.dart';
+import 'forgot_password_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -82,8 +83,19 @@ class _LoginScreenState extends State<LoginScreen> {
               decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
               onSubmitted: (_) => _busy ? null : _signIn(),
             ),
-            if (_error != null) ...[const SizedBox(height: 12), MessageBox(_error!, isError: true)],
-            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: _busy
+                    ? null
+                    : () => Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => ForgotPasswordScreen(
+                              api: widget.api, session: widget.session, email: _email.text.trim()),
+                        )),
+                child: const Text('Forgot password?'),
+              ),
+            ),
+            if (_error != null) ...[MessageBox(_error!, isError: true), const SizedBox(height: 12)],
             FilledButton(onPressed: _busy ? null : _signIn, child: const Text('Sign in')),
             const SizedBox(height: 12),
             const Row(children: [
@@ -102,8 +114,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 padding: EdgeInsets.only(top: 8),
                 child: Text('Google sign-in is not configured', textAlign: TextAlign.center),
               ),
-            const SizedBox(height: 16),
-            TextButton(
+            const SizedBox(height: 32),
+            const Text('New here?', textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            FilledButton.tonal(
               onPressed: _busy
                   ? null
                   : () => Navigator.of(context).push(MaterialPageRoute<void>(

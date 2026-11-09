@@ -10,15 +10,18 @@ import 'session_manager.dart';
 
 /// A failed call, with the HTTP status (0 = the server could not be reached) and a message for people.
 class ApiException implements Exception {
-  const ApiException(this.status, this.message);
+  const ApiException(this.status, this.message, [this.code]);
   final int status;
   final String message;
+  final String? code; // a short name for the problem, when the API gives one
 
-  /// The API answers errors as {"error": "..."}.
+  /// The API answers errors as {"error": "...", "code": "..."}.
   factory ApiException.fromResponse(int status, String body) {
     try {
       final json = jsonDecode(body);
-      if (json is Map && json['error'] is String) return ApiException(status, json['error'] as String);
+      if (json is Map && json['error'] is String) {
+        return ApiException(status, json['error'] as String, json['code'] as String?);
+      }
     } catch (_) {}
     return ApiException(status, 'Something went wrong (HTTP $status).');
   }
@@ -47,6 +50,25 @@ class ApiService {
 
   Future<void> loginWithGoogle(String idToken) => _signIn('/auth/google', {'idToken': idToken});
 
+  // ── Forgot password: a one-time code by email, then a new password ─────────────
+  /// Asks for a code. The answer is the same whether or not the email has an account.
+  Future<String> forgotPassword(String email) => _message('/auth/forgot-password', {'email': email});
+
+  Future<String> resetPassword(String email, String code, String password) =>
+      _message('/auth/reset-password', {'email': email, 'code': code, 'password': password});
+
+  Future<String> _message(String path, Map<String, dynamic> body) async {
+    final json = await _send('POST', path, body: body) as Map<String, dynamic>;
+    return json['message'] as String;
+  }
+
+  // ── Link Google to the account you are signed in to ────────────────────────────
+  Future<void> linkGoogle(String idToken) async {
+    final body = {'idToken': idToken};
+    final json = await _authorized('POST', '/auth/google/link', body: body) as Map<String, dynamic>;
+    session.updateUser(User.fromJson(json));
+  }
+
   Future<void> _signIn(String path, Map<String, dynamic> body) async {
     final json = await _send('POST', path, body: body) as Map<String, dynamic>;
     await session.save(AuthSession.fromJson(json));
@@ -57,13 +79,13 @@ class ApiService {
 
   Future<List<dynamic>> adminUsers() async => await _authorized('GET', '/admin/users') as List<dynamic>;
 
-  Future<dynamic> _authorized(String method, String path) async {
+  Future<dynamic> _authorized(String method, String path, {Map<String, dynamic>? body}) async {
     try {
-      return await _send(method, path, token: session.accessToken);
+      return await _send(method, path, body: body, token: session.accessToken);
     } on ApiException catch (e) {
       if (e.status != 401) rethrow;
       if (!await _refresh()) rethrow; // the refresh failed: we are signed out now
-      return _send(method, path, token: session.accessToken); // one retry
+      return _send(method, path, body: body, token: session.accessToken); // one retry
     }
   }
 

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../config.dart';
 import '../models/access_token_claims.dart';
 import '../services/api_service.dart';
 import '../services/google_service.dart';
@@ -54,7 +55,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _callMe() => _call('GET /me', () async {
         final u = await widget.api.me();
-        return {'id': u.id, 'email': u.email, 'name': u.name, 'role': u.role, 'provider': u.provider};
+        return {'id': u.id, 'email': u.email, 'name': u.name, 'role': u.role, 'methods': u.methods};
       });
 
   Future<void> _callAdmin() => _call('GET /admin/users', widget.api.adminUsers);
@@ -66,6 +67,26 @@ class _HomeScreenState extends State<HomeScreen> {
         ? 'POST /auth/refresh\nNew access token and new refresh token. The old refresh token cannot be used again.'
         : 'POST /auth/refresh\nRefresh refused.';
     _outputIsError = !ok;
+    if (mounted) setState(() => _busy = false);
+  }
+
+  /// Adds Google to the account we are signed in to. The server checks the ID token like at sign-in.
+  Future<void> _linkGoogle() async {
+    setState(() => _busy = true);
+    try {
+      final idToken = await widget.google.idToken();
+      if (idToken != null) {
+        await widget.api.linkGoogle(idToken);
+        _output = 'POST /auth/google/link\nGoogle is linked. Now both ways in open this account.';
+        _outputIsError = false;
+      }
+    } on ApiException catch (e) {
+      _output = 'POST /auth/google/link\nHTTP ${e.status}: ${e.message}';
+      _outputIsError = true;
+    } on GoogleProblem catch (e) {
+      _output = 'Google\n${e.message}';
+      _outputIsError = true;
+    }
     if (mounted) setState(() => _busy = false);
   }
 
@@ -91,7 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: ListTile(
                   leading: const Icon(Icons.verified_user),
                   title: Text('Welcome, ${user.name}'),
-                  subtitle: Text('${user.email}\nrole: ${user.role}   ·   signed in with: ${user.provider}'),
+                  subtitle: Text('${user.email}\nrole: ${user.role}   ·   ways in: ${user.methods.join(' + ')}'),
                   isThreeLine: true,
                 ),
               ),
@@ -108,6 +129,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: const Text('Call admin route (expect 403)'),
               ),
               OutlinedButton(onPressed: _busy ? null : _refreshNow, child: const Text('Refresh token now')),
+              if (user != null && !user.hasGoogle && Config.googleConfigured)
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _linkGoogle,
+                  icon: const Icon(Icons.link),
+                  label: const Text('Link Google account'),
+                ),
             ]),
             const SizedBox(height: 16),
             MessageBox(_output, isError: _outputIsError, mono: true),

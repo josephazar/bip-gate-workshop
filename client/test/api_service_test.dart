@@ -10,7 +10,7 @@ Map<String, Object?> _session(String access, String refresh) => {
       'accessToken': access,
       'refreshToken': refresh,
       'expiresIn': 900,
-      'user': {'id': 'u1', 'email': 'a@b.co', 'name': 'Ada', 'role': 'user', 'provider': 'password'},
+      'user': {'id': 'u1', 'email': 'a@b.co', 'name': 'Ada', 'role': 'user', 'methods': ['password']},
     };
 
 http.Response _json(int status, Object body) =>
@@ -98,5 +98,41 @@ void main() {
     await api.login('a@b.co', 'a long enough password');
     await expectLater(api.adminUsers(), throwsA(isA<ApiException>().having((e) => e.status, 'status', 403)));
     expect(session.status, SessionStatus.signedIn);
+  });
+
+  test('the API error code is kept, so the app can react to it', () {
+    final e = ApiException.fromResponse(409, '{"error":"Link it.","code":"email_has_password"}');
+    expect(e.code, 'email_has_password');
+    expect(ApiException.fromResponse(401, '{"error":"No."}').code, isNull);
+  });
+
+  test('forgot and reset call the right doors and return the server message', () async {
+    final seen = <String>[];
+    final api = ApiService(SessionManager(store: MemoryTokenStore()), baseUrl: 'http://x', client: MockClient((req) async {
+      seen.add('${req.method} ${req.url.path} ${req.body}');
+      return _json(200, {'message': 'ok ${req.url.path}'});
+    }));
+    expect(await api.forgotPassword('a@b.co'), 'ok /auth/forgot-password');
+    expect(await api.resetPassword('a@b.co', '123456', 'a long enough password'), 'ok /auth/reset-password');
+    expect(seen[0], contains('"email":"a@b.co"'));
+    expect(seen[1], contains('"code":"123456"'));
+  });
+
+  test('linking Google sends the token with the access token and updates the user', () async {
+    final session = SessionManager(store: MemoryTokenStore());
+    String? auth, body;
+    final api = ApiService(session, baseUrl: 'http://x', client: MockClient((req) async {
+      if (req.url.path == '/auth/login') return _json(200, _session('a1', 'r1'));
+      auth = req.headers['authorization'];
+      body = req.body;
+      return _json(200, {'id': 'u1', 'email': 'a@b.co', 'name': 'Ada', 'role': 'user', 'methods': ['password', 'google']});
+    }));
+    await api.login('a@b.co', 'a long enough password');
+    expect(session.user!.hasGoogle, isFalse);
+    await api.linkGoogle('google-id-token');
+    expect(auth, 'Bearer a1');
+    expect(body, contains('google-id-token'));
+    expect(session.user!.hasGoogle, isTrue);
+    expect(session.user!.methods, ['password', 'google']);
   });
 }

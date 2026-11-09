@@ -51,7 +51,7 @@ test('register: validation, hashing, no role escalation, duplicates', async () =
   const ok = await call('/auth/register', { body: { email, password: PASSWORD, name: 'QA', role: 'admin' } });
   assert.equal(ok.status, 201);
   assert.equal(ok.data.user.role, 'user');                         // a client can never choose its own role
-  assert.equal(ok.data.user.provider, 'password');
+  assert.deepEqual(ok.data.user.methods, ['password']);
   assert.ok(!JSON.stringify(ok.data).includes('password_hash'));
 
   const row = (await db.query('SELECT * FROM users WHERE email = $1', [email])).rows[0];

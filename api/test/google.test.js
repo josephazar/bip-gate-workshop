@@ -2,17 +2,21 @@
 // here we test OUR rules: find or create by Google subject, never merge by email, verified email only.
 process.env.LOGIN_ATTEMPTS = '1000';
 process.env.GOOGLE_CLIENT_IDS = 'test-web-client.apps.googleusercontent.com';
+process.env.RESET_COOLDOWN_SECONDS = '0';
 const { test, after, before, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const { OAuth2Client } = require('google-auth-library');
 const { app } = require('../src/app');
 const db = require('../src/db');
 const { setupDatabase } = require('../src/lib/setup-db');
+const { outbox } = require('../src/lib/mailer');
 
 let server, base, nextPayload, lastAudience;
 const stamp = Date.now();
 const googleEmail = `google-${stamp}@example.test`;
 const passwordEmail = `pw-${stamp}@example.test`;
+const otherEmail = `other-${stamp}@example.test`;
+const googleOnlyEmail = `gonly-${stamp}@example.test`;
 
 const call = async (path, body, token) => {
   const res = await fetch(base + path, {
@@ -37,7 +41,7 @@ before(async () => {
 });
 
 after(async () => {
-  await db.query('DELETE FROM users WHERE email = ANY($1)', [[googleEmail, passwordEmail]]);
+  await db.query('DELETE FROM users WHERE email = ANY($1)', [[googleEmail, passwordEmail, otherEmail, googleOnlyEmail]]);
   await new Promise((r) => server.close(r));
   await db.pool.end();
 });
@@ -51,7 +55,7 @@ test('a verified Google identity creates an account once, keyed by the subject',
   nextPayload = { sub: `sub-${stamp}`, email: googleEmail, email_verified: true, name: 'Gina Google' };
   const first = await call('/auth/google', { idToken: 'valid-token' });
   assert.equal(first.status, 200);
-  assert.equal(first.data.user.provider, 'google');
+  assert.deepEqual(first.data.user.methods, ['google']);
   assert.equal(first.data.user.name, 'Gina Google');
   assert.deepEqual(lastAudience, ['test-web-client.apps.googleusercontent.com']);   // OUR client id is the accepted audience
   assert.equal((await call('/me', null, first.data.accessToken)).data.email, googleEmail);
@@ -73,5 +77,51 @@ test('the same email as a password account is never merged automatically', async
   nextPayload = { sub: `sub3-${stamp}`, email: passwordEmail, email_verified: true, name: 'Pat G' };
   const res = await call('/auth/google', { idToken: 'valid-token' });
   assert.equal(res.status, 409);
+  assert.equal(res.data.code, 'email_has_password');   // the app can show the right hint
   assert.equal((await db.query('SELECT google_sub FROM users WHERE email = $1', [passwordEmail])).rows[0].google_sub, null);
+});
+
+test('linking: a signed-in password user adds Google, then both doors open the same account', async () => {
+  const pw = await call('/auth/login', { email: passwordEmail, password: 'a long enough password' });
+  assert.deepEqual(pw.data.user.methods, ['password']);
+
+  assert.equal((await call('/auth/google/link', { idToken: 'valid-token' })).status, 401);   // must be signed in
+
+  nextPayload = { sub: `sub3-${stamp}`, email: passwordEmail, email_verified: true, name: 'Pat G' };
+  assert.equal((await call('/auth/google/link', { idToken: 'forged' }, pw.data.accessToken)).status, 401);
+  const linked = await call('/auth/google/link', { idToken: 'valid-token' }, pw.data.accessToken);
+  assert.equal(linked.status, 200);
+  assert.deepEqual(linked.data.methods, ['password', 'google']);
+
+  const viaGoogle = await call('/auth/google', { idToken: 'valid-token' });   // now Google finds the same account
+  assert.equal(viaGoogle.status, 200);
+  assert.equal(viaGoogle.data.user.id, pw.data.user.id);
+  assert.equal((await call('/auth/login', { email: passwordEmail, password: 'a long enough password' })).status, 200);
+
+  // a second link on the same account, or a Google account that belongs to someone else, is refused
+  assert.equal((await call('/auth/google/link', { idToken: 'valid-token' }, pw.data.accessToken)).data.code, 'already_linked');
+  const other = await call('/auth/register', { email: otherEmail, password: 'another long password', name: 'Olly' });
+  assert.equal((await call('/auth/google/link', { idToken: 'valid-token' }, other.data.accessToken)).data.code, 'google_in_use');
+});
+
+test('a Google-only account can add a password with a reset code', async () => {
+  nextPayload = { sub: `sub4-${stamp}`, email: googleOnlyEmail, email_verified: true, name: 'Gus' };
+  const first = await call('/auth/google', { idToken: 'valid-token' });
+  assert.deepEqual(first.data.user.methods, ['google']);
+
+  // registering the same email with a password is refused, and points to "Forgot password"
+  const clash = await call('/auth/register', { email: googleOnlyEmail, password: 'a long enough password', name: 'Gus' });
+  assert.equal(clash.status, 409);
+  assert.match(clash.data.error, /Forgot password/);
+
+  outbox.length = 0;
+  await call('/auth/forgot-password', { email: googleOnlyEmail });
+  const code = /reset code is (\d{6})/.exec(outbox.at(-1).text)[1];
+  const reset = await call('/auth/reset-password', { email: googleOnlyEmail, code, password: 'my brand new password' });
+  assert.equal(reset.status, 200);
+
+  const login = await call('/auth/login', { email: googleOnlyEmail, password: 'my brand new password' });
+  assert.equal(login.status, 200);
+  assert.deepEqual(login.data.user.methods, ['password', 'google']);
+  assert.equal(login.data.user.id, first.data.user.id);   // the same account, now with two ways in
 });

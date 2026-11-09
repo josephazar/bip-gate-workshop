@@ -2,6 +2,7 @@
 # THE GATE: one script that starts everything.
 #   ./start.sh        PostgreSQL check -> database -> API -> Android emulator -> Flutter app (hot reload: r / R / q)
 #   ./start.sh api    only the API (http://localhost:3220)
+#   ./code.sh         show the newest forgot-password code (printed in the API log)
 # Stop it all with ./stop.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -92,6 +93,7 @@ else
   [[ "$HEALTH" == *'"ok":true'* ]] || { tail -n 15 "$RUN/api.log" >&2; fail "The API did not answer in time. Log: $RUN/api.log"; }
   say "API: ready at http://localhost:$PORT   (log: .run/api.log)"
 fi
+say "Forgot-password codes: your computer has no mail server, so the API prints the email. Read it with ./code.sh"
 
 if [ "$MODE" = "api" ]; then
   say "Only the API was started. Stop it with ./stop.sh"

@@ -79,7 +79,7 @@ elif lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
        If it is the old course launcher, stop it first. From the course folder:
          python3 LOCAL-ONLY/bip-local.py stop"
 else
-  say "API: starting on port $PORT…"
+  say "API: starting on port ${PORT}…"
   set -m   # its own process group, so Ctrl+C in this window does not stop it
   (cd api && exec env PORT="$PORT" nohup node --env-file-if-exists=.env src/server.js) > "$RUN/api.log" 2>&1 &
   echo $! > "$RUN/api.pid"   # the subshell becomes node (exec), so this is node's own pid

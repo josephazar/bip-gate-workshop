@@ -1,0 +1,552 @@
+openapi: 3.0.3
+info:
+  title: The Gate API
+  version: 2.0.0
+  description: |
+    The API of the Gate workshop: sign in with an email and a password or with Google, stay signed in with a refresh token, and reset a forgotten password.
+
+    **Try it in four steps**
+
+    1. Open **POST /auth/register**, press *Try it out*, then *Execute*. The answer holds an `accessToken` and a `refreshToken`.
+    2. Press **Authorize** at the top right, paste the access token (without the word Bearer) and confirm.
+    3. Open **GET /me** and execute it: 200 and your profile.
+    4. Open **GET /admin/users**: 403, because you are a normal user. Run `npm run promote -- <email>` in the api folder and execute it again: 200 at once, because the role is read from the database on every request, not from the token.
+
+    **Good to know**
+
+    - The access token is a JWT (HS256) that lives 15 minutes. The refresh token is a random string that lives 7 days and works only once.
+    - Register, login, google, google/link, forgot-password and reset-password accept 20 tries per address every 15 minutes, then answer 429.
+    - Forgot password sends the code by email. On your own computer there is no mail server, so the API prints the email in its log: read the newest code with `./code.sh`.
+    - This page is for the workshop. A real service would usually protect or hide its API documentation.
+servers:
+  - url: /
+    description: This server
+tags:
+  - name: Health
+    description: Is the API running?
+  - name: Sign in
+    description: Create an account and get a session.
+  - name: Tokens
+    description: Stay signed in, or sign out.
+  - name: Password
+    description: Forgot password and reset password, with a one-time code.
+  - name: Google
+    description: Sign in with Google, and link Google to an existing account.
+  - name: Protected
+    description: Routes that answer only to a valid access token.
+paths:
+  /:
+    get:
+      tags: [Health]
+      summary: Name of the app
+      operationId: root
+      responses:
+        '200':
+          description: The name of the app, where the health check is, and whether Google sign-in is configured.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app: { type: string, example: The Gate }
+                  health: { type: string, example: /healthz }
+                  googleConfigured: { type: boolean, example: true }
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Asks the database a trivial question, so a 200 means the API and PostgreSQL both answer.
+      operationId: healthz
+      responses:
+        '200':
+          description: The API and the database are up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  app: { type: string, example: bip-gate }
+                  version: { type: string, example: 2.0.0 }
+  /auth/register:
+    post:
+      tags: [Sign in]
+      summary: Create an account with an email and a password
+      description: |
+        The password is hashed with Argon2id before it is stored. The answer is a full session, so the person is signed in at once.
+        Registering the same email twice answers 409.
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Account created. The person is signed in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          description: A field is missing or invalid (a valid email, a name of 1 to 100 characters, a password of 12 to 128 characters).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: Use a password of 12 to 128 characters.
+        '409':
+          description: That email already has an account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: That email has an account. Sign in, or use Forgot password.
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /auth/login:
+    post:
+      tags: [Sign in]
+      summary: Sign in with an email and a password
+      description: One message for both mistakes (wrong email, wrong password), so the door cannot tell anyone who is registered.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          description: The email is not a valid address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Wrong email or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: Wrong email or password.
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /auth/refresh:
+    post:
+      tags: [Tokens]
+      summary: Exchange a refresh token for a new pair of tokens
+      description: |
+        Each refresh token works exactly once. If a token that was already used comes back, someone may have copied it: the answer is 401 and every refresh token of that person is deleted, so both the owner and the thief must sign in again.
+      operationId: refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: A new access token and a new refresh token. The new refresh token keeps the original 7-day limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: The refresh token is unknown, expired or already used.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: Please sign in again.
+  /auth/logout:
+    post:
+      tags: [Tokens]
+      summary: Sign out
+      description: Deletes the refresh token. The access token stays valid until it expires, because the API does not keep a list of access tokens.
+      operationId: logout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: Done. There is no body, even when the token was unknown.
+  /auth/forgot-password:
+    post:
+      tags: [Password]
+      summary: Ask for a six-digit reset code
+      description: |
+        The answer is the same for every address, so this door cannot tell anyone who is registered. If the address has an account, a code is sent (printed in the API log on your own computer: run `./code.sh`). One new code per address per minute.
+      operationId: forgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotRequest'
+      responses:
+        '200':
+          description: The same message for every address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+              example:
+                message: If an account uses this email, we sent a 6-digit code. It works for 15 minutes.
+        '400':
+          description: The email is not a valid address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /auth/reset-password:
+    post:
+      tags: [Password]
+      summary: Choose a new password with the code
+      description: |
+        The code works once, for 15 minutes, with 5 wrong guesses. Every failure gives the same message. When it works, all the person's refresh tokens are deleted, so old sessions end.
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetRequest'
+      responses:
+        '200':
+          description: The password was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+              example:
+                message: Password changed. Sign in with your new password.
+        '400':
+          description: The code is wrong or has expired, or the new password breaks the rules.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: That code is wrong or has expired. Ask for a new one.
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /auth/google:
+    post:
+      tags: [Google]
+      summary: Sign in with a Google ID token
+      description: |
+        The app sends the ID token it got from Google. The server checks Google's signature, the issuer, the expiry and that the token was made for our own client ID, and requires a verified email. The person is found by Google's stable `sub`, never by the email alone. If the email already belongs to a password account the answer is 409: the person must sign in with the password and link Google from inside the app.
+      operationId: googleSignIn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleRequest'
+      responses:
+        '200':
+          description: Signed in (an account is created the first time).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          description: 'The body is not { "idToken": "..." }.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Google did not accept the token, or the Google account has no verified email.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: This email already has a password account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: This email already has a password account. Sign in with your password, then tap "Link Google account".
+                code: email_has_password
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: Google sign-in is not configured on this server (GOOGLE_CLIENT_IDS is empty). Email and password still work.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /auth/google/link:
+    post:
+      tags: [Google]
+      summary: Link Google to the account you are signed in to
+      description: |
+        For a person who is already signed in (for example with a password) and wants Google as a second way in. The person proves both: the session (the access token) and Google (the ID token). The account is identified by the session, never by an email in the request.
+      operationId: googleLink
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleRequest'
+      responses:
+        '200':
+          description: Google is linked. The updated profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: 'The body is not { "idToken": "..." }.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Google is already linked to this account (`already_linked`), or that Google account belongs to someone else (`google_in_use`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: Google is already linked.
+                code: already_linked
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: Google sign-in is not configured on this server.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /me:
+    get:
+      tags: [Protected]
+      summary: Who am I?
+      description: Any signed-in user. A missing, altered or expired token answers 401.
+      operationId: me
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Your profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/users:
+    get:
+      tags: [Protected]
+      summary: List the users (admins only)
+      description: |
+        401 means the server does not know who you are. 403 means it knows exactly who you are, and you may not do this. The role is read from the database, so a demoted admin loses access at once.
+      operationId: adminUsers
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Up to 200 users, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminUserRow'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: You are signed in, but you are not an admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: You are signed in, but you may not do this.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The `accessToken` from register, login, google or refresh. Paste it without the word Bearer.
+  responses:
+    Unauthorized:
+      description: No token, or a token that is invalid or expired.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Sign in first.
+    TooManyRequests:
+      description: Too many tries from this address. Wait for the window (15 minutes) to pass.
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: Too many requests, please try again later.
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Ada
+        email:
+          type: string
+          format: email
+          example: ada@example.test
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+          example: a long passphrase 123
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ada@example.test
+        password:
+          type: string
+          example: a long passphrase 123
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          description: The `refreshToken` of the latest session.
+    ForgotRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ada@example.test
+    ResetRequest:
+      type: object
+      required: [email, code, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ada@example.test
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+          description: The six digits from the email (read the newest one with ./code.sh).
+          example: '123456'
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+          example: a new long passphrase 456
+    GoogleRequest:
+      type: object
+      required: [idToken]
+      properties:
+        idToken:
+          type: string
+          description: The ID token that Google gave to the app.
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        methods:
+          type: array
+          description: The ways this person can sign in. One account can have both.
+          items:
+            type: string
+            enum: [password, google]
+          example: [password]
+    AdminUserRow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        created_at:
+          type: string
+          format: date-time
+    Session:
+      type: object
+      description: What every successful sign-in returns.
+      properties:
+        accessToken:
+          type: string
+          description: A signed JWT (HS256) with the claims sub, role, iss, aud and exp. Lives 15 minutes.
+        refreshToken:
+          type: string
+          description: A random string. Lives 7 days and works once. The server stores only its hash.
+        expiresIn:
+          type: integer
+          description: Seconds until the access token expires.
+          example: 900
+        user:
+          $ref: '#/components/schemas/User'
+    Message:
+      type: object
+      properties:
+        message:
+          type: string
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: A message for the person.
+        code:
+          type: string
+          description: A short code the app can act on (only on some errors).
+          example: email_has_password

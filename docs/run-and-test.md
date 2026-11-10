@@ -77,3 +77,13 @@ createdb bip_gate_qa
 cd api    && DATABASE_URL=postgres://localhost/bip_gate_qa npm test
 cd client && flutter analyze && flutter test
 ```
+
+## The API documentation (Swagger)
+
+While the API runs, open <http://localhost:3220/docs>. It lists every route with what it expects and what it answers, and each route has a **Try it out** button, so you can call the API without curl.
+
+1. **POST /auth/register**: *Try it out*, then *Execute*. The answer holds an `accessToken`.
+2. **Authorize** (top right): paste the access token, without the word Bearer.
+3. **GET /me**: 200. **GET /admin/users**: 403, until you run `npm run promote -- <email>` in `api`.
+
+The description is the file [`api/docs/openapi.yaml`](../api/docs/openapi.yaml) (OpenAPI 3.0), also served at <http://localhost:3220/openapi.yaml>. The page loads Swagger UI from a CDN at a fixed version and checks the files with an integrity hash, so nothing is added to `package.json`. A test (`api/test/docs.test.js`) fails when the file and the real routes differ.

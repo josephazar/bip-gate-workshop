@@ -94,6 +94,10 @@ In `.run/api.log` for the API and `.run/emulator.log` for the emulator, inside t
 tail -f .run/api.log
 ```
 
+### Is there documentation for the API routes?
+
+Yes. While the API runs, open <http://localhost:3220/docs>: every route, what it expects and what it answers, with a **Try it out** button. The page needs an internet connection the first time, because it loads Swagger UI from a CDN. If `/docs` says "Route not found", the API that is running is an older copy: run `./stop.sh`, then `./start.sh`.
+
 ## Passwords and email
 
 ### Can I send real emails?

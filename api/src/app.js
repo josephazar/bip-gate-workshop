@@ -24,6 +24,7 @@ app.get('/healthz', async (req, res) => {
 
 app.use('/auth', require('./routes/auth'));
 app.use(require('./routes/me'));
+app.use(require('../docs'));   // the Swagger page at /docs and the OpenAPI file at /openapi.yaml
 
 app.use((req, res) => res.status(404).json({ error: 'Route not found.' }));
 

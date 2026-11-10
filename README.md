@@ -35,6 +35,8 @@ Mermaid diagrams, drawn by GitHub, explain each idea. Start with [docs/README.md
 | [The Flutter app](docs/app.md) | layers, session states, screens, restoring the session |
 | [Run it and test it](docs/run-and-test.md) | what `start.sh` does, the checklist, what the tests try |
 
+While the API runs, its documentation is at <http://localhost:3220/docs> (Swagger: every route, with a **Try it out** button). See [Run it and test it](docs/run-and-test.md#the-api-documentation-swagger).
+
 Something does not work? See the [FAQ](FAQ.md): `createdb: command not found`, `password authentication failed`, a busy port, Google sign-in, and more.
 
 ## Run it (one script)
